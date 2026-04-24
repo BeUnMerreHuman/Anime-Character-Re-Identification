@@ -2,6 +2,8 @@
 __pycache__/
 *.py[codz]
 *$py.class
+models/
+DEIMv2/
 
 # C extensions
 *.so
@@ -81,6 +83,10 @@ target/
 # IPython
 profile_default/
 ipython_config.py
+
+#Database
+*.db
+*.pkl
 
 # pyenv
 #   For a library or package, you might want to ignore these files since the code is
@@ -205,3 +211,4 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
