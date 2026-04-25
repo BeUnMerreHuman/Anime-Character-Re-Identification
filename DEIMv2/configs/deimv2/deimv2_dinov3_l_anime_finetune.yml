@@ -61,12 +61,13 @@ train_dataloader:
         - {type: ConvertPILImage, dtype: 'float32', scale: True}
         - {type: Normalize, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
         - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
-      policy: ~  # CRITICAL: This explicitly nullifies the ghost policy from dataloader.yml
+      policy: ~  # Correctly nullifies the dataset policy from dataloader.yml
 
   collate_fn:
     base_size: 640
+    base_size_repeat: 1 # THIS is how you disable multi-scale. It forces a single scale (640).
     with_expand: False 
-    stop_epoch: 0 # CRITICAL: This stops the multi-scale resizing from dataloader.yml immediately
+    stop_epoch: 32 # Aligned with your 36 total epochs and 4 no_aug epochs. Do not set to 0.
 
 val_dataloader:
   total_batch_size: 16
