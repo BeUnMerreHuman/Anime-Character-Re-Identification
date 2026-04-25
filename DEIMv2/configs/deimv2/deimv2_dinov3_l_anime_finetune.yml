@@ -1,0 +1,95 @@
+__include__: [
+  '../dataset/anime_detection.yml', # Points to your new dataset config
+  '../runtime.yml',
+  '../base/dataloader.yml',
+  '../base/optimizer.yml',
+  '../base/deimv2.yml',
+]
+
+output_dir: ./outputs/deimv2_dinov3_l_anime_head_only
+
+DEIM:
+  backbone: DINOv3STAs
+
+DINOv3STAs:
+  name: dinov3_vits16
+  weights_path: ./ckpts/dinov3_vits16_pretrain_lvd1689m-08c60483.pth
+  interaction_indexes: [5,8,11]
+  # CRITICAL: This freezes the DINOv3 backbone
+  finetune: False  
+  conv_inplane: 32
+  hidden_dim: 224
+
+HybridEncoder:
+  in_channels: [224, 224, 224]
+  hidden_dim: 224
+  dim_feedforward: 896
+
+DEIMTransformer:
+  feat_channels: [224, 224, 224]
+  hidden_dim: 224
+  num_layers: 4
+  eval_idx: -1
+  dim_feedforward: 1792
+  # CRITICAL: Align queries with the fact that it's a single class
+  num_classes: 1 
+
+epoches: 36 # Reduced epochs. Head-only converges faster than full fine-tuning.
+
+lrsheduler: flatcosine
+lr_gamma: 0.5
+warmup_iter: 1000 # Reduced warmup
+flat_epoch: 18    
+no_aug_epoch: 4
+
+optimizer:
+  type: AdamW
+  params: 
+    # Removed DINOv3 parameter groups entirely to ensure the optimizer 
+    # doesn't attempt to allocate momentum states for frozen weights.
+    - params: '^(?=.*(?:sta|encoder|decoder))(?=.*(?:norm|bn|bias)).*$'
+      weight_decay: 0.
+    - params: '^(?=.*(?:sta|encoder|decoder))(?!.*(?:norm|bn|bias)).*$'
+      weight_decay: 0.000125
+
+  lr: 0.0005 # You may need to increase this slightly (e.g., 0.001) since the backbone isn't learning.
+  betas: [0.9, 0.999]
+
+## Dense O2O: Mosaic + Mixup + CopyBlend
+train_dataloader: 
+  dataset: 
+    transforms:
+      ops:
+        - {type: Mosaic, output_size: 320, rotation_range: 10, translation_range: [0.1, 0.1], scaling_range: [0.5, 1.5],
+           probability: 1.0, fill_value: 0, use_cache: True, max_cached_images: 50, random_pop: True}
+        - {type: RandomPhotometricDistort, p: 0.5}
+        - {type: RandomZoomOut, fill: 0}
+        - {type: RandomIoUCrop, p: 0.8}
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: RandomHorizontalFlip}
+        - {type: Resize, size: [640, 640], }
+        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+        - {type: Normalize, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
+        - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
+      policy:
+        epoch: [4, 18, 30] 
+
+  collate_fn:
+    mixup_epochs: [4, 18]
+    stop_epoch: 30
+    copyblend_epochs: [4, 30]
+    base_size_repeat: 3
+
+val_dataloader:
+  dataset:
+    transforms:
+      ops:
+        - {type: Resize, size: [640, 640], }
+        - {type: ConvertPILImage, dtype: 'float32', scale: True}
+        - {type: Normalize, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
+
+DEIMCriterion:
+  num_classes: 1
+  matcher:
+    matcher_change_epoch: 25
