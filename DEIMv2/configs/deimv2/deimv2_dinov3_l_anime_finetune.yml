@@ -45,23 +45,21 @@ no_aug_epoch: 4
 optimizer:
   type: AdamW
   params: 
-    # Removed DINOv3 parameter groups entirely to ensure the optimizer 
-    # doesn't attempt to allocate momentum states for frozen weights.
     - params: '^(?=.*(?:sta|encoder|decoder))(?=.*(?:norm|bn|bias)).*$'
       weight_decay: 0.
     - params: '^(?=.*(?:sta|encoder|decoder))(?!.*(?:norm|bn|bias)).*$'
       weight_decay: 0.000125
-
-  lr: 0.0005 # You may need to increase this slightly (e.g., 0.001) since the backbone isn't learning.
+  # 0.0005 was for BS 32. You are using BS 16.
+  lr: 0.00025 
   betas: [0.9, 0.999]
 
 ## Dense O2O: Mosaic + Mixup + CopyBlend
 train_dataloader: 
+  total_batch_size: 16
   dataset: 
     transforms:
       ops:
-        - {type: Mosaic, output_size: 320, rotation_range: 10, translation_range: [0.1, 0.1], scaling_range: [0.5, 1.5],
-           probability: 1.0, fill_value: 0, use_cache: True, max_cached_images: 50, random_pop: True}
+        - {type: Mosaic, output_size: 320, rotation_range: 10, translation_range: [0.1, 0.1], scaling_range: [0.5, 1.5], probability: 1.0, fill_value: 0, use_cache: True, max_cached_images: 50, random_pop: True}
         - {type: RandomPhotometricDistort, p: 0.5}
         - {type: RandomZoomOut, fill: 0}
         - {type: RandomIoUCrop, p: 0.8}
@@ -76,12 +74,15 @@ train_dataloader:
         epoch: [4, 18, 30] 
 
   collate_fn:
+    base_size: 640
+    with_expand: False # CRITICAL: Disable expansions that push bounds out of memory
     mixup_epochs: [4, 18]
     stop_epoch: 30
     copyblend_epochs: [4, 30]
     base_size_repeat: 3
 
 val_dataloader:
+  total_batch_size: 16
   dataset:
     transforms:
       ops:
