@@ -1,5 +1,5 @@
 __include__: [
-  '../dataset/anime_detection.yml', # Points to your new dataset config
+  '../dataset/anime_detection.yml', 
   '../runtime.yml',
   '../base/dataloader.yml',
   '../base/optimizer.yml',
@@ -15,7 +15,6 @@ DINOv3STAs:
   name: dinov3_vits16
   weights_path: ./ckpts/dinov3_vits16_pretrain_lvd1689m-08c60483.pth
   interaction_indexes: [5,8,11]
-  # CRITICAL: This freezes the DINOv3 backbone
   finetune: False  
   conv_inplane: 32
   hidden_dim: 224
@@ -31,14 +30,13 @@ DEIMTransformer:
   num_layers: 4
   eval_idx: -1
   dim_feedforward: 1792
-  # CRITICAL: Align queries with the fact that it's a single class
   num_classes: 1 
 
-epoches: 36 # Reduced epochs. Head-only converges faster than full fine-tuning.
+epoches: 36 
 
 lrsheduler: flatcosine
 lr_gamma: 0.5
-warmup_iter: 1000 # Reduced warmup
+warmup_iter: 1000 
 flat_epoch: 18    
 no_aug_epoch: 4
 
@@ -49,14 +47,12 @@ optimizer:
       weight_decay: 0.
     - params: '^(?=.*(?:sta|encoder|decoder))(?!.*(?:norm|bn|bias)).*$'
       weight_decay: 0.000125
-  # 0.0005 was for BS 32. You are using BS 16.
   lr: 0.00025 
   betas: [0.9, 0.999]
 
-## Dense O2O: Mosaic + Mixup + CopyBlend
 train_dataloader: 
   total_batch_size: 16
-  num_workers: 2 # EXPLICITLY OVERRIDING THE BASE CONFIG
+  num_workers: 2 
   dataset: 
     transforms:
       ops:
@@ -65,19 +61,20 @@ train_dataloader:
         - {type: ConvertPILImage, dtype: 'float32', scale: True}
         - {type: Normalize, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
         - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
+      policy: ~  # CRITICAL: This explicitly nullifies the ghost policy from dataloader.yml
 
   collate_fn:
     base_size: 640
     with_expand: False 
-    scales: [640]
+    stop_epoch: 0 # CRITICAL: This stops the multi-scale resizing from dataloader.yml immediately
 
 val_dataloader:
   total_batch_size: 16
-  num_workers: 2 # EXPLICITLY OVERRIDING THE BASE CONFIG
+  num_workers: 2 
   dataset:
     transforms:
       ops:
-        - {type: Resize, size: [640, 640], }
+        - {type: Resize, size: [640, 640]}
         - {type: ConvertPILImage, dtype: 'float32', scale: True}
         - {type: Normalize, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
         
