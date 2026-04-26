@@ -6,7 +6,7 @@ __include__: [
   '../base/deimv2.yml',
 ]
 
-output_dir: ./outputs/deimv2_dinov3_l_anime_head_only
+output_dir: ./outputs/deimv2_dinov3_l_anime
 
 DEIM:
   backbone: DINOv3STAs
@@ -32,7 +32,6 @@ DEIMTransformer:
   dim_feedforward: 1792
   num_classes: 1 
 
-# Strict limit to 8 epochs
 epoches: 8 
 
 lrsheduler: flatcosine
@@ -59,18 +58,17 @@ train_dataloader:
       ops:
         - {type: RandomPhotometricDistort, p: 0.5}
         - {type: RandomZoomOut, fill: 0}
-        - {type: RandomIoUCrop, p: 0.8}
-        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: SanitizeBoundingBoxes, min_size: 4}
         - {type: RandomHorizontalFlip}
         - {type: Resize, size: [640, 640]}
-        - {type: SanitizeBoundingBoxes, min_size: 1}
+        - {type: SanitizeBoundingBoxes, min_size: 4}
         - {type: ConvertPILImage, dtype: 'float32', scale: True}
         - {type: Normalize, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
         - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
       policy: 
         name: stop_epoch
         epoch: 6 
-        ops: ['RandomPhotometricDistort', 'RandomZoomOut', 'RandomIoUCrop']
+        ops: ['RandomPhotometricDistort', 'RandomZoomOut']
 
   collate_fn:
     base_size: 640
