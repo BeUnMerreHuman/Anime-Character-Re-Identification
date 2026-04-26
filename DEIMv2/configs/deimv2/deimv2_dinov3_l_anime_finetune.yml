@@ -32,13 +32,13 @@ DEIMTransformer:
   dim_feedforward: 1792
   num_classes: 1 
 
-epoches: 8 
+epoches: 16 
 
 lrsheduler: flatcosine
 lr_gamma: 0.5
 warmup_iter: 1000 
-flat_epoch: 4        
-no_aug_epoch: 2      
+flat_epoch: 8        
+no_aug_epoch: 4      
 
 optimizer:
   type: AdamW
@@ -67,14 +67,14 @@ train_dataloader:
         - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
       policy: 
         name: stop_epoch
-        epoch: 6 
+        epoch: 12 
         ops: ['RandomPhotometricDistort', 'RandomZoomOut']
 
   collate_fn:
     base_size: 640
     base_size_repeat: 1 
     with_expand: False 
-    stop_epoch: 6 
+    stop_epoch: 12 
 
 val_dataloader:
   total_batch_size: 16
@@ -89,4 +89,4 @@ val_dataloader:
 DEIMCriterion:
   num_classes: 1
   matcher:
-    matcher_change_epoch: 5
+    matcher_change_epoch: 11
