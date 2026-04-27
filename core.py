@@ -1,4 +1,5 @@
 import os
+import yaml
 import torch
 import faiss
 import pickle
@@ -7,21 +8,20 @@ import torchvision.transforms as T
 import torch.nn as nn
 from pathlib import Path
 from PIL import Image
-from huggingface_hub import PyTorchModelHubMixin
-from dotenv import load_dotenv
 
 from DEIMv2.engine.backbone import DINOv3STAs
 from DEIMv2.engine.deim import HybridEncoder, DEIMTransformer
 from DEIMv2.engine.deim.postprocessor import PostProcessor
 
-class DEIMv2_ZeroShot(nn.Module, PyTorchModelHubMixin):
+class DEIMv2_Local(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.backbone      = DINOv3STAs(**config["DINOv3STAs"])
-        self.encoder       = HybridEncoder(**config["HybridEncoder"])
-        self.decoder       = DEIMTransformer(**config["DEIMTransformer"])
-        self.postprocessor = PostProcessor(**config["PostProcessor"])
-
+        
+        self.backbone = DINOv3STAs(**config.get("DINOv3STAs", {}))
+        self.encoder  = HybridEncoder(**config.get("HybridEncoder", {}))
+        self.decoder = DEIMTransformer(**config.get("DEIMTransformer", {}))
+        self.postprocessor = PostProcessor(**config.get("PostProcessor", {}))
+        
         self._captured_embeddings = []
         target_layer = self.decoder.decoder.layers[-1]
         target_layer.register_forward_hook(self._hook_fn)
@@ -42,23 +42,45 @@ class DEIMv2_ZeroShot(nn.Module, PyTorchModelHubMixin):
         return {
             "detections": detections,
             "embeddings": latent_dna,
-            "raw_dec": x_dec  # Crucial for index matching
+            "raw_dec": x_dec  
         }
 
 
-def load_pipeline():
-    load_dotenv()
-    hf_token = os.getenv("HF_TOKEN")
-    if not hf_token:
-        raise EnvironmentError("HF_TOKEN is not set.")
-
+def load_pipeline(config_path="models\\config.json", weights_path="models\\best_stg2.pth"):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"[model] Using device: {device}")
 
-    print("[model] Fetching weights and config from Hub...")
-    model = DEIMv2_ZeroShot.from_pretrained("Intellindust/DEIMv2_DINOv3_L_COCO", token=hf_token)
+    print(f"[model] Loading config from {config_path}...")
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Configuration file missing: {config_path}")
+        
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    print("[model] Building architecture...")
+    model = DEIMv2_Local(config)
+    
+    print(f"[model] Loading weights from {weights_path}...")
+    if not os.path.exists(weights_path):
+        raise FileNotFoundError(f"Weights file missing: {weights_path}")
+        
+    checkpoint = torch.load(weights_path, map_location="cpu", weights_only=False)
+    
+    if "ema" in checkpoint:
+        state_dict = checkpoint["ema"]["module"] if "module" in checkpoint["ema"] else checkpoint["ema"]
+    elif "model" in checkpoint:
+        state_dict = checkpoint["model"]
+    elif "state_dict" in checkpoint:
+        state_dict = checkpoint["state_dict"]
+    else:
+        state_dict = checkpoint
+        
+    state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+
+    model.load_state_dict(state_dict, strict=False)
     model.eval().to(device)
     print("[model] Model ready.")
+    
     return model, device
 
 
@@ -129,8 +151,8 @@ _TRANSFORMS = T.Compose([
 ])
 
 
-def process_image(image: Image.Image, model, device, threshold: float = 0.90):
-    image = image.convert("RGB") # Fix RGBA vulnerability
+def process_image(image: Image.Image, model, device, threshold: float = 0.50):
+    image = image.convert("RGB") 
     w, h = image.size
     orig_size = torch.tensor([[w, h]], dtype=torch.long, device=device)
     tensor    = _TRANSFORMS(image).unsqueeze(0).to(device)
@@ -148,19 +170,16 @@ def process_image(image: Image.Image, model, device, threshold: float = 0.90):
     boxes  = det_result["boxes"][0] if det_result["boxes"].dim() > 2 else det_result["boxes"]
     scores = det_result["scores"][0] if det_result["scores"].dim() > 1 else det_result["scores"]
 
-    # 1. Filter by threshold and COCO Person class (0)
-    valid = (scores > threshold) #& (labels == 0)
+    valid = (scores > threshold)
     valid_boxes  = boxes[valid].cpu().numpy()
     valid_scores = scores[valid].cpu()
 
-    # 2. Map sorted detections back to unsorted raw queries
     logits = raw_dec["pred_logits"][0]
     prob = logits.sigmoid()
     class_0_probs = prob[:, 0].cpu()
 
     valid_embeddings = []
     for score in valid_scores:
-        # Find the exact query index that generated this post-processed score
         best_idx = torch.argmin(torch.abs(class_0_probs - score))
         valid_embeddings.append(embeddings[0][best_idx].numpy())
 
