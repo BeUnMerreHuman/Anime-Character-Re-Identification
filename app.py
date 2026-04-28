@@ -2,7 +2,8 @@ import numpy as np
 import gradio as gr
 from PIL import Image, ImageDraw, ImageFont
 
-from core import load_pipeline, PersonDatabase, process_image
+from model import load_pipeline, process_image
+from database import PersonDatabase
 
 # ---------------------------------------------------------------------------
 # Global singletons  (initialised once at startup)

@@ -1,1 +1,0 @@
-# Anime-Character-Re-Identification
