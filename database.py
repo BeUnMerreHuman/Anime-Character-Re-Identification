@@ -1,63 +1,159 @@
 import os
-import faiss
-import pickle
+import io
+import base64
+import lancedb
+import pyarrow as pa
+import pandas as pd
 import numpy as np
+from PIL import Image
+
+
+def img_to_b64(img: Image.Image) -> str:
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+def b64_to_img(b64_str: str) -> Image.Image:
+    return Image.open(io.BytesIO(base64.b64decode(b64_str)))
+
 
 class PersonDatabase:
-    def __init__(self, db_path="reid_db.pkl", threshold=0.4, variance_warning=0.3):
-        self.db_path          = db_path
-        self.threshold        = threshold
-        self.variance_warning = variance_warning
-        self.identities       = {}
-        self.faiss_index      = None
-        self.idx_to_name      = {}
-        self.load()
+    # Cosine similarity threshold: 1.0 = identical, 0.0 = orthogonal.
+    # Embeddings with similarity >= threshold are considered the same identity.
+    def __init__(self, db_uri="database/lancedb", table_name="identities", threshold=0.50):
+        self.db_uri = db_uri
+        self.table_name = table_name
+        self.threshold = threshold
+        os.makedirs(db_uri, exist_ok=True)
+        self.db = lancedb.connect(db_uri)
+        self.table = None
+        self._load_table()
 
-    def load(self):
-        if os.path.exists(self.db_path):
-            with open(self.db_path, "rb") as f:
-                self.identities = pickle.load(f)
-        self.rebuild_index()
+    def _load_table(self):
+        if self.table_name in self.db.table_names():
+            self.table = self.db.open_table(self.table_name)
 
-    def save(self):
-        with open(self.db_path, "wb") as f:
-            pickle.dump(self.identities, f)
+    def _next_id(self) -> int:
+        if self.table is None or self.table.count_rows() == 0:
+            return 1
+        df = self.table.to_pandas()
+        return int(df["id"].max()) + 1
 
-    def rebuild_index(self):
-        if not self.identities:
-            self.faiss_index = None
-            self.idx_to_name = {}
+    def search(self, emb: np.ndarray):
+        """
+        Search for the closest identity using cosine similarity.
+
+        Embeddings are stored normalized, so LanceDB's cosine metric gives
+        a distance in [0, 2] where 0 = identical. We convert it back to a
+        similarity score in [-1, 1] for intuitive thresholding.
+
+        Returns:
+            (uid, label, similarity) on match, or (None, None, similarity) otherwise.
+        """
+        if self.table is None or self.table.count_rows() == 0:
+            return None, None, None
+
+        results = (
+            self.table
+            .search(np.array(emb, dtype=np.float32), vector_column_name="embedding")
+            .metric("dot")
+            .limit(1)
+            .to_pandas()
+        )
+
+        if results.empty:
+            return None, None, None
+
+        top = results.iloc[0]
+        similarity = float(top["_distance"])  # dot metric returns similarity directly; no inversion needed
+
+        if similarity >= self.threshold:
+            return int(top["id"]), top["label"], similarity
+
+        return None, None, similarity
+
+    def create_identity(self, emb: np.ndarray, thumbnail: Image.Image) -> int:
+        """Create a new identity row and return its assigned ID."""
+        new_id = self._next_id()
+        emb_f32 = np.array(emb, dtype=np.float32)
+        dim = len(emb_f32)
+
+        record = {
+            "id": new_id,
+            "label": None,
+            "thumbnail": img_to_b64(thumbnail),
+            "embedding": emb_f32.tolist(),
+        }
+
+        if self.table is None:
+            schema = pa.schema([
+                pa.field("id", pa.int32()),
+                pa.field("label", pa.string()),
+                pa.field("thumbnail", pa.string()),
+                pa.field("embedding", pa.list_(pa.float32(), dim)),
+            ])
+            self.table = self.db.create_table(self.table_name, data=[record], schema=schema)
+        else:
+            self.table.add([record])
+
+        return new_id
+
+    def add_embedding(self, uid: int, emb: np.ndarray, thumbnail: Image.Image):
+        """Append an additional normalized embedding for an existing identity."""
+        if self.table is None:
             return
 
-        first_name = next(iter(self.identities))
-        dim = self.identities[first_name][0].shape[0]
+        df = self.table.search().where(f"id = {uid}").limit(10).to_pandas()
+        label = df.iloc[0]["label"] if not df.empty else None
 
-        self.faiss_index = faiss.IndexFlatL2(dim)
-        self.idx_to_name = {}
+        record = {
+            "id": uid,
+            "label": label,
+            "thumbnail": img_to_b64(thumbnail),
+            "embedding": np.array(emb, dtype=np.float32).tolist(),
+        }
+        self.table.add([record])
 
-        for idx, (name, embs) in enumerate(self.identities.items()):
-            mean_emb = np.mean(embs, axis=0)
-            centroid = mean_emb / np.linalg.norm(mean_emb)
-            self.faiss_index.add(np.array([centroid], dtype=np.float32))
-            self.idx_to_name[idx] = name
+    def assign_label_and_merge(self, source_uid: int, new_label: str):
+        """
+        Label an identity. If the label already belongs to another identity,
+        merge both into the one with the lower ID.
+        """
+        if self.table is None or not new_label.strip():
+            return
 
-    def search(self, emb):
-        if self.faiss_index is None:
-            return None, None
-        distances, indices = self.faiss_index.search(
-            np.array([emb], dtype=np.float32), k=1
-        )
-        dist = distances[0][0]
-        if dist < self.threshold:
-            return self.idx_to_name[indices[0][0]], dist
-        return None, dist
+        label = new_label.strip()
+        df_all = self.table.to_pandas()
 
-    def add_embedding(self, name: str, emb: np.ndarray):
-        if name not in self.identities:
-            self.identities[name] = []
-        self.identities[name].append(emb)
-        self.save()
-        self.rebuild_index()
+        existing = df_all[
+            (df_all["label"] == label) & (df_all["id"] != source_uid)
+        ]
 
-    def get_names(self):
-        return list(self.identities.keys())
+        if not existing.empty:
+            other_uid = int(existing.iloc[0]["id"])
+            keep_uid = min(source_uid, other_uid)
+            drop_uid = max(source_uid, other_uid)
+
+            df_keep = df_all[df_all["id"] == keep_uid].copy()
+            df_drop = df_all[df_all["id"] == drop_uid].copy()
+
+            df_keep["label"] = label
+            df_drop["id"] = keep_uid
+            df_drop["label"] = label
+
+            self.table.delete(f"id = {keep_uid}")
+            self.table.delete(f"id = {drop_uid}")
+
+            combined = pd.concat([df_keep, df_drop], ignore_index=True)
+            self.table.add(combined.to_dict(orient="records"))
+
+        else:
+            self.table.update(where=f"id = {source_uid}", values={"label": label})
+
+    def get_ui_options(self) -> list:
+        if self.table is None or self.table.count_rows() == 0:
+            return []
+        df = self.table.to_pandas()
+        labels = df["label"].dropna().unique().tolist()
+        return sorted([str(l) for l in labels if str(l).strip()])
