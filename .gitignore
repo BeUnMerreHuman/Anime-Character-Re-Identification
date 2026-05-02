@@ -11,6 +11,8 @@ image_frames/
 tests/
 utils/
 video/
+DEIMv2/
+crop/
 
 # C extensions
 *.so

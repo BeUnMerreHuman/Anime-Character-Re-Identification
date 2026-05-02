@@ -7,21 +7,16 @@ import pandas as pd
 import numpy as np
 from PIL import Image
 
-
 def img_to_b64(img: Image.Image) -> str:
     buf = io.BytesIO()
     img.save(buf, format="JPEG")
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
-
 def b64_to_img(b64_str: str) -> Image.Image:
     return Image.open(io.BytesIO(base64.b64decode(b64_str)))
 
-
 class PersonDatabase:
-    # Cosine similarity threshold: 1.0 = identical, 0.0 = orthogonal.
-    # Embeddings with similarity >= threshold are considered the same identity.
-    def __init__(self, db_uri="database/lancedb", table_name="identities", threshold=0.90):
+    def __init__(self, db_uri="database/lancedb", table_name="identities", threshold=0.67):
         self.db_uri = db_uri
         self.table_name = table_name
         self.threshold = threshold
@@ -41,16 +36,6 @@ class PersonDatabase:
         return int(df["id"].max()) + 1
 
     def search(self, emb: np.ndarray):
-        """
-        Search for the closest identity using cosine similarity.
-
-        Embeddings are stored normalized, so LanceDB's cosine metric gives
-        a distance in [0, 2] where 0 = identical. We convert it back to a
-        similarity score in [-1, 1] for intuitive thresholding.
-
-        Returns:
-            (uid, label, similarity) on match, or (None, None, similarity) otherwise.
-        """
         if self.table is None or self.table.count_rows() == 0:
             return None, None, None
 
@@ -66,7 +51,7 @@ class PersonDatabase:
             return None, None, None
 
         top = results.iloc[0]
-        similarity = 1 - float(top["_distance"])  # dot metric returns similarity directly; no inversion needed
+        similarity = 1 - float(top["_distance"])
 
         if similarity >= self.threshold:
             return int(top["id"]), top["label"], similarity
@@ -74,7 +59,6 @@ class PersonDatabase:
         return None, None, similarity
 
     def create_identity(self, emb: np.ndarray, thumbnail: Image.Image) -> int:
-        """Create a new identity row and return its assigned ID."""
         new_id = self._next_id()
         emb_f32 = np.array(emb, dtype=np.float32)
         dim = len(emb_f32)
@@ -100,7 +84,6 @@ class PersonDatabase:
         return new_id
 
     def add_embedding(self, uid: int, emb: np.ndarray, thumbnail: Image.Image):
-        """Append an additional normalized embedding for an existing identity."""
         if self.table is None:
             return
 
@@ -116,10 +99,6 @@ class PersonDatabase:
         self.table.add([record])
 
     def assign_label_and_merge(self, source_uid: int, new_label: str):
-        """
-        Label an identity. If the label already belongs to another identity,
-        merge both into the one with the lower ID.
-        """
         if self.table is None or not new_label.strip():
             return
 

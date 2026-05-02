@@ -2,13 +2,11 @@ import numpy as np
 from PIL import ImageDraw, ImageFont
 from model import process_image
 
-
 def _get_font(size: int = 16):
     try:
         return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size)
     except Exception:
         return ImageFont.load_default()
-
 
 def perform_detection(original_image, model, device, db, session_det):
     if original_image is None:
@@ -37,7 +35,7 @@ def perform_detection(original_image, model, device, db, session_det):
             "bbox": [x1, y1, x2, y2],
             "uid": uid,
             "name": assigned_name,
-            "similarity": similarity,   # cosine similarity in [-1, 1]; None if table empty
+            "similarity": similarity,
             "score": float(score),
             "is_known": is_known,
         }
@@ -50,9 +48,7 @@ def perform_detection(original_image, model, device, db, session_det):
     status = f"{len(detected_options)} person(s) detected." if detected_options else "No persons detected."
     return draw_image, detected_options, status, session_det
 
-
 def redraw_image_from_state(original_image, session_det):
-    """Rebuilds the annotated image purely from the current session state."""
     if original_image is None or not session_det:
         return original_image, []
 
@@ -75,7 +71,6 @@ def redraw_image_from_state(original_image, session_det):
 
     return draw_image, detected_options
 
-
 def get_detection_metrics(choice_key, session_det):
     if not choice_key:
         return None, None
@@ -85,15 +80,14 @@ def get_detection_metrics(choice_key, session_det):
         return None, None
 
     score_pct = int(det["score"] * 100)
+    sim_val = f"{det['similarity']:.3f}" if det["similarity"] is not None else "N/A"
+    
     if det["is_known"]:
-        sim_val = f"{det['similarity']:.3f}" if det["similarity"] is not None else "N/A"
         metrics = f"**Matched ID {det['uid']}** — Confidence: {score_pct}% | Cosine Similarity: {sim_val}"
     else:
-        sim_val = f"{det['similarity']:.3f}" if det["similarity"] is not None else "N/A"
         metrics = f"**No Match (New Entity)** — Confidence: {score_pct}% | Best Similarity: {sim_val}"
 
     return metrics, det.get("thumbnail")
-
 
 def assign_identity(choice_key, session_det, db):
     if not choice_key:
@@ -110,7 +104,6 @@ def assign_identity(choice_key, session_det, db):
     session_det[choice_key] = det
 
     return f"✓ Assigned new ID {uid} to this detection.", session_det, True
-
 
 def save_and_update_label(choice_key, session_det, db, new_label):
     if not choice_key:
