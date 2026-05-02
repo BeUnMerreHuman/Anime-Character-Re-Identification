@@ -6,7 +6,6 @@ __include__: [
   '../base/deimv2.yml',
 ]
 
-
 output_dir: ./outputs/deimv2_dinov3_l_anime_finetune
 
 DEIM:
@@ -33,11 +32,11 @@ DEIMTransformer:
   dim_feedforward: 1792
   num_classes: 1 
 
-epoches: 20 
+epoches: 16 
 
 lrsheduler: flatcosine
 lr_gamma: 0.5
-warmup_iter: 1000
+warmup_iter: 650
 flat_epoch: 12        
 no_aug_epoch: 4      
 
@@ -67,7 +66,7 @@ optimizer:
   betas: [0.9, 0.999]
 
 train_dataloader: 
-  total_batch_size: 16
+  total_batch_size: 8
   num_workers: 4     
   dataset: 
     transforms:
@@ -83,7 +82,7 @@ train_dataloader:
         - {type: ConvertBoxes, fmt: 'cxcywh', normalize: True}
       policy: 
         name: stop_epoch
-        epoch: 16 
+        epoch: 12 
         ops: ['RandomPhotometricDistort', 'RandomZoomOut']
 
   collate_fn:
@@ -93,7 +92,7 @@ train_dataloader:
     stop_epoch: 12 
 
 val_dataloader:
-  total_batch_size: 16
+  total_batch_size: 8
   num_workers: 4     
   dataset:
     transforms:
@@ -105,4 +104,4 @@ val_dataloader:
 DEIMCriterion:
   num_classes: 1
   matcher:
-    matcher_change_epoch: 15 
+    matcher_change_epoch: 12 
