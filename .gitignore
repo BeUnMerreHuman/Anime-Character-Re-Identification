@@ -5,6 +5,12 @@ __pycache__/
 models/
 dataset/
 model/
+database/
+database2/
+image_frames/
+tests/
+utils/
+video/
 
 # C extensions
 *.so
@@ -88,6 +94,8 @@ ipython_config.py
 #Database
 *.db
 *.pkl
+embedding_explorer.html
+check_database.py
 
 # pyenv
 #   For a library or package, you might want to ignore these files since the code is

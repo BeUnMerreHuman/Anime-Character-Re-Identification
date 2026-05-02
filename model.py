@@ -30,26 +30,50 @@ class Letterbox:
         
         return T.functional.pad(img, padding, fill=self.fill)
 
+
 class DEIMv2_Local(nn.Module):
     def __init__(self, config):
         super().__init__()
-        
         self.backbone = DINOv3STAs(**config.get("DINOv3STAs", {}))
         self.encoder  = HybridEncoder(**config.get("HybridEncoder", {}))
         self.decoder = DEIMTransformer(**config.get("DEIMTransformer", {}))
         self.postprocessor = PostProcessor(**config.get("PostProcessor", {}))
+        
+        self._patch_tokens = None
+        
+        # Register a forward hook to intercept tokens in a single pass
+        def hook_fn(module, input, output):
+            # Output shape: [B, Seq_Len, Embed_Dim]
+            # DINOv3 prepends 1 CLS token and a dynamic number of storage tokens.
+            n_skip = self.backbone.dinov3.n_storage_tokens + 1
+            self._patch_tokens = output[:, n_skip:, :]
+            
+        self.backbone.dinov3.norm.register_forward_hook(hook_fn)
 
     def forward(self, x, orig_target_sizes):
+        # Reset tokens for the current pass
+        self._patch_tokens = None
+        
+        # 1. Single forward pass. This executes the backbone and triggers the hook.
         x_feat = self.backbone(x)
+        
+        # 2. Retrieve intercepted patch tokens securely
+        if self._patch_tokens is None:
+            raise RuntimeError("Forward hook failed to capture patch tokens. Backbone execution bypassed the norm layer.")
+        
+        patch_tokens = self._patch_tokens
+
         x_enc  = self.encoder(x_feat)
         x_dec  = self.decoder(x_enc)
         detections = self.postprocessor(x_dec, orig_target_sizes)
         
         return {
             "detections": detections,
-            "backbone_features": x_feat,  # Exposing raw spatial maps
+            "backbone_features": x_feat,
+            "patch_tokens": patch_tokens, # Exposing the intercepted pure 1D semantic tokens
             "raw_dec": x_dec  
         }
+
 
 def load_pipeline(config_path="model/config.json", weights_path="model/model.safetensors"):
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -77,11 +101,13 @@ def load_pipeline(config_path="model/config.json", weights_path="model/model.saf
     
     return model, device
 
+
 _TRANSFORMS = T.Compose([
     Letterbox(640),
     T.ToTensor(),
     T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
+
 
 def process_image(image: Image.Image, model, device, threshold: float = 0.50):
     image = image.convert("RGB") 
@@ -93,21 +119,22 @@ def process_image(image: Image.Image, model, device, threshold: float = 0.50):
     pad_top = (640 - new_h) // 2
 
     orig_size = torch.tensor([[w, h]], dtype=torch.long, device=device)
+    # The Letterbox transform strictly guarantees a 640x640 tensor
     tensor = _TRANSFORMS(image).unsqueeze(0).to(device)
 
     with torch.no_grad():
         outputs = model(tensor, orig_size)
 
     raw_dec = outputs["raw_dec"]
-    backbone_feats = outputs["backbone_features"]
+    patch_tokens = outputs["patch_tokens"] # Shape: (1, N, 384)
     
-    # FIX 1: Extract the highest resolution feature map (Stride 8) instead of the lowest (Stride 32).
-    if isinstance(backbone_feats, (list, tuple)):
-        spatial_map = backbone_feats[0]
-    elif isinstance(backbone_feats, dict):
-        spatial_map = list(backbone_feats.values())[0]
-    else:
-        spatial_map = backbone_feats
+    # 1. Reshape the 1D ViT sequence back into a 2D spatial map
+    B, N, C = patch_tokens.shape
+    # Patch size is 16. For a 640x640 input, H and W are exactly 40.
+    H_feat = W_feat = 640 // 16 
+    
+    # Target shape for RoI Align: (B, C, H, W)
+    spatial_map = patch_tokens.view(B, H_feat, W_feat, C).permute(0, 3, 1, 2).contiguous()
 
     logits = raw_dec["pred_logits"][0]    
     raw_boxes = raw_dec["pred_boxes"][0]   
@@ -119,11 +146,10 @@ def process_image(image: Image.Image, model, device, threshold: float = 0.50):
     valid_scores = class_0_probs[valid_mask].cpu().numpy()
     valid_raw_boxes = raw_boxes[valid_mask]
 
-    # Early exit if no detections survive the threshold
     if len(valid_scores) == 0:
-        return np.empty((0, 4)), np.empty((0,)), np.empty((0, spatial_map.shape[1]))
+        return np.empty((0, 4)), np.empty((0,)), np.empty((0, C))
 
-    # 1. Translate raw normalized [cx, cy, w, h] to canvas-scale coordinates
+    # Box translation to canvas-scale coordinates
     cx_canvas, cy_canvas, bw_canvas, bh_canvas = valid_raw_boxes.unbind(-1)
     
     cx_px = cx_canvas * 640.0
@@ -131,7 +157,6 @@ def process_image(image: Image.Image, model, device, threshold: float = 0.50):
     bw_px = bw_canvas * 640.0
     bh_px = bh_canvas * 640.0
     
-    # 2. Calculate final output bounding boxes mapping back to the original image dimensions
     cx_orig = (cx_px - pad_left) / scale
     cy_orig = (cy_px - pad_top) / scale
     w_orig = bw_px / scale
@@ -144,32 +169,32 @@ def process_image(image: Image.Image, model, device, threshold: float = 0.50):
     
     valid_boxes_orig = torch.stack([x1_orig, y1_orig, x2_orig, y2_orig], dim=-1).cpu().numpy()
 
-    # 3. Formulate absolute RoI boxes for the aligned feature extraction
+    # Formulate absolute RoI boxes
     x1_roi = cx_px - 0.5 * bw_px
     y1_roi = cy_px - 0.5 * bh_px
     x2_roi = cx_px + 0.5 * bw_px
     y2_roi = cy_px + 0.5 * bh_px
     
-    # RoI Align requires [batch_idx, x1, y1, x2, y2]. Batch size is 1, so index is 0.
     batch_idx = torch.zeros_like(x1_roi)
     roi_boxes = torch.stack([batch_idx, x1_roi, y1_roi, x2_roi, y2_roi], dim=1)
 
-    # 4. Compute spatial scale (feature map dimensions vs original 640 canvas)
-    spatial_scale = spatial_map.shape[3] / 640.0
+    # 2. Strict spatial scale configuration
+    spatial_scale = 1.0 / 16.0 
 
-    # 5. Execute RoI Align strictly on threshold-surviving boxes
+    # 3. Execute RoI Align with a high-density 14x14 grid
     roi_features = ops.roi_align(
         spatial_map,
         boxes=roi_boxes,
-        output_size=(7, 7), # Configurable hyperparameter for local resolution
+        output_size=(14, 14), 
         spatial_scale=spatial_scale,
         aligned=True
     )
 
-    # 6. Global Average Pooling (GAP) to collapse spatial grid into pure vector representation
-    pooled_features = roi_features[:, :, 2:5, 2:5].mean(dim=[2, 3])
+    # 4. Mean Pooling (Global Average Pooling) 
+    # Replaces 'amax' to properly preserve the average structural representation
+    pooled_features = roi_features.mean(dim=[2, 3])
     
-    # FIX 2: L2 Normalize the vectors so distance calculations prioritize semantic angle over magnitude
+    # L2 Normalize
     valid_embeddings = F.normalize(pooled_features, p=2, dim=1).cpu().numpy()
 
     return valid_boxes_orig, valid_scores, valid_embeddings

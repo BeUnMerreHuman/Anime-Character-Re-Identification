@@ -21,7 +21,7 @@ def b64_to_img(b64_str: str) -> Image.Image:
 class PersonDatabase:
     # Cosine similarity threshold: 1.0 = identical, 0.0 = orthogonal.
     # Embeddings with similarity >= threshold are considered the same identity.
-    def __init__(self, db_uri="database/lancedb", table_name="identities", threshold=0.50):
+    def __init__(self, db_uri="database/lancedb", table_name="identities", threshold=0.90):
         self.db_uri = db_uri
         self.table_name = table_name
         self.threshold = threshold
@@ -66,7 +66,7 @@ class PersonDatabase:
             return None, None, None
 
         top = results.iloc[0]
-        similarity = float(top["_distance"])  # dot metric returns similarity directly; no inversion needed
+        similarity = 1 - float(top["_distance"])  # dot metric returns similarity directly; no inversion needed
 
         if similarity >= self.threshold:
             return int(top["id"]), top["label"], similarity
