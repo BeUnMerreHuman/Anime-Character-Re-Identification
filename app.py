@@ -4,7 +4,7 @@ from database import PersonDatabase
 import inference
 
 print("Initialising pipeline …")
-model, device = load_pipeline()
+detector, embedder_processor, embedder_model, embedder_device = load_pipeline()
 db = PersonDatabase()
 print("Ready.")
 
@@ -27,7 +27,13 @@ def on_image_change():
 
 def on_analyze_image(original_image, session_det):
     draw_image, detected_options, status, updated_session = inference.perform_detection(
-        original_image, model, device, db, session_det
+        original_image, 
+        detector, 
+        embedder_processor, 
+        embedder_model, 
+        embedder_device, 
+        db, 
+        session_det
     )
 
     if draw_image is None:
@@ -158,14 +164,12 @@ with gr.Blocks(title="Identity Management Dashboard") as demo:
         outputs=[lbl_metrics, img_thumb],
     )
 
-    # WIRED CORRECTLY
     btn_new_id.click(
         fn=on_assign_new_id,
         inputs=[dd_detections, session_detections, img_in],
         outputs=[status_out, combo_identity, session_detections, img_out, dd_detections],
     )
 
-    # WIRED CORRECTLY
     btn_save.click(
         fn=on_save_and_label,
         inputs=[dd_detections, session_detections, combo_identity, img_in],

@@ -6,4 +6,8 @@ tests/
 utils/
 video/
 .env
-check_database.py
+anime_character_detector/
+image_feature_extractor/
+database/
+embedding_explorer.html
+.venv/
