@@ -12,11 +12,12 @@ Follow these steps to set up the environment and run the application:
 
 ## 🚀 Setup Instructions
 
-### 1. Clone this repository
+### 1. Clone this repository and its submodules
 
 ```bash
 git clone https://github.com/BeUnMerreHuman/Anime-Character-Re-Identification.git
 cd Anime-Character-Re-Identification
+git clone https://github.com/Intellindust-AI-Lab/DEIMv2.git
 ```
 
 ### 2. Install dependencies
