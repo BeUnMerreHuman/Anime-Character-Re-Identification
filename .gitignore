@@ -1,0 +1,16 @@
+.cache/
+image_frames/
+__pycache__/
+*.pyc
+tests/
+utils/
+video/
+.env
+anime_character_detector/
+image_feature_extractor/
+database/
+embedding_explorer.html
+.venv/
+DEIMv2/
+image_frames/
+
