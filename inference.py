@@ -1,4 +1,3 @@
-import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from model import run_detector, run_embedder
@@ -12,7 +11,6 @@ def _get_font(size: int = 16) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 def letterbox_crop(img: Image.Image, target_size: int = 512, pad_color: tuple = (128, 128, 128)) -> Image.Image:
-
     w, h = img.size
     max_dim = max(w, h)
     
@@ -39,10 +37,11 @@ def perform_detection(
 
     session_det.clear()
 
-    img_bgr = cv2.cvtColor(np.array(original_image), cv2.COLOR_RGB2BGR)
-    orig_h, orig_w = img_bgr.shape[:2]
+    # Get dimensions directly from the PIL image
+    orig_w, orig_h = original_image.size
 
-    boxes_orig, scores, cls_ids = run_detector(detector, img_bgr)
+    # Pass the PIL Image directly to the refactored run_detector
+    boxes_orig, scores, cls_ids = run_detector(detector, original_image)
 
     if len(boxes_orig) == 0:
         return original_image.copy(), [], "No characters detected.", session_det

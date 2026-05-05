@@ -25,10 +25,12 @@ cd Anime-Character-Re-Identification
 uv sync
 ```
 
-### 3. Clone the anime character detector (dependency)
+### 3. Download detection model
+
+Model is already uploaded
 
 ```bash
-git clone https://github.com/ksasao/anime-character-detector.git anime_character_detector
+kaggle kernels output muneeburrehman98/deimv2-s-finetune -p model
 ```
 
 ### 4. Download the DINOv3 model (requires access approval)
