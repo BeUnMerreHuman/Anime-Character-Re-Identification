@@ -1,0 +1,10 @@
+.venv/
+database/
+DEIMv2/
+DINOv3/
+image_frames/
+__pycache__/
+results/
+tests/
+video/
+.env
