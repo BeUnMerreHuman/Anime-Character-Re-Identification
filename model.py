@@ -81,3 +81,23 @@ def run_embedder(embedder_processor, embedder_session, raw_crop, target_size=(44
     embedding = outputs[0][0] 
     
     return embedding
+
+
+def run_embedder_batch(embedder_processor, embedder_session, raw_crops, target_size=(448, 448)):
+    
+    if not raw_crops:
+        return []
+
+    tensors = []
+    for crop in raw_crops:
+        img_padded = ImageOps.pad(crop.convert("RGB"), target_size, color=(128, 128, 128))
+        tensors.append(embedder_processor(img_padded))  # shape: (3, H, W)
+
+    # Stack into a single (N, 3, H, W) batch and convert to numpy once
+    batch = torch.stack(tensors, dim=0).numpy()
+
+    input_name = embedder_session.get_inputs()[0].name
+    outputs = embedder_session.run(None, {input_name: batch})
+
+    # outputs[0] shape: (N, embedding_dim) — split back into a plain list
+    return [outputs[0][i] for i in range(len(raw_crops))]

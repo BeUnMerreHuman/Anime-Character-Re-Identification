@@ -1,6 +1,6 @@
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-from model import run_detector, run_embedder
+from model import run_detector, run_embedder, run_embedder_batch
 from database import THRESHOLD_CONFIDENT, THRESHOLD_UNCERTAIN, MIN_EMBEDDINGS_UNCERTAIN
 
 
@@ -36,17 +36,20 @@ def perform_detection(
     boxes_orig[:, [0, 2]] = boxes_orig[:, [0, 2]].clip(0, orig_w)
     boxes_orig[:, [1, 3]] = boxes_orig[:, [1, 3]].clip(0, orig_h)
 
+    raw_crops = [
+        original_image.crop([float(v) for v in box]) for box in boxes_orig
+    ]
+    embeddings = run_embedder_batch(embedder_processor, embedder_session, raw_crops)
+
     draw_image = original_image.copy()
     draw       = ImageDraw.Draw(draw_image, "RGBA")
     font       = _get_font(14)
     detected_options = []
 
-    for idx, (box_orig, score) in enumerate(zip(boxes_orig, scores)):
+    for idx, (box_orig, score, raw_crop, emb) in enumerate(
+        zip(boxes_orig, scores, raw_crops, embeddings)
+    ):
         x1, y1, x2, y2 = [float(v) for v in box_orig]
-
-        raw_crop = original_image.crop((x1, y1, x2, y2))
-
-        emb = run_embedder(embedder_processor, embedder_session, raw_crop)
 
         uid, assigned_name, similarity = db.search(emb)
         is_known = uid is not None

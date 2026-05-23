@@ -57,8 +57,11 @@ def on_analyze_image(original_image, session_det):
 def on_select_detection(choice_key, session_det):
     metrics, thumbnail = inference.get_detection_metrics(choice_key, session_det)
     if metrics is None:
-        return "", None
-    return metrics, thumbnail
+        return "", None, gr.update()
+    det = session_det.get(choice_key, {})
+    label = det.get("label") or det.get("name")
+    identity_update = gr.update(value=label) if label else gr.update()
+    return metrics, thumbnail, identity_update
 
 
 def on_assign_new_id(choice_key, session_det, original_image):
@@ -160,7 +163,7 @@ with gr.Blocks(title="Identity Management Dashboard") as demo:
     dd_detections.change(
         fn=on_select_detection,
         inputs=[dd_detections, session_detections],
-        outputs=[lbl_metrics, img_thumb],
+        outputs=[lbl_metrics, img_thumb, combo_identity],
     )
 
     btn_new_id.click(
