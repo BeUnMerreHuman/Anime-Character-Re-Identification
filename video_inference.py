@@ -4,8 +4,8 @@ import os
 import cv2
 import numpy as np
 from PIL import Image
-from norfair import Detection, Tracker, Video
-from norfair.drawing import draw_tracked_boxes
+from norfair import Detection, Tracker
+from norfair.drawing import draw_box
 
 from database import PersonDatabase
 
@@ -19,12 +19,19 @@ HIT_COUNTER_MAX = 3
 
 def _mean_emb(embs: list[np.ndarray]) -> np.ndarray:
     """Compute normalized centroid embedding."""
-    
+
     arr = np.stack(embs, axis=0)
     mean_emb = arr.mean(axis=0)
 
     norm = np.linalg.norm(mean_emb)
     return mean_emb / norm if norm > 1e-9 else mean_emb
+
+
+def _build_output_path(input_path: str) -> str:
+    """Derive a sibling output path from the input path."""
+
+    base, ext = os.path.splitext(input_path)
+    return f"{base}_output{ext or '.mp4'}"
 
 
 def process_video(
@@ -38,9 +45,22 @@ def process_video(
 
     from model import run_detector, run_embedder_batch
 
-    # Load video and initialize tracker
-    video = Video(input_path=input_path)
+    # ---------- open input with raw OpenCV (no display needed) ----------
+    cap = cv2.VideoCapture(input_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open video: {input_path}")
 
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps         = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    width       = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height      = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    # ---------- open output writer ----------
+    raw_output_path = _build_output_path(input_path)
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(raw_output_path, fourcc, fps, (width, height))
+
+    # ---------- initialise tracker ----------
     tracker = Tracker(
         distance_function="euclidean",
         distance_threshold=NORFAIR_DIST_THR,
@@ -51,11 +71,15 @@ def process_video(
     uid_info: dict[int, dict] = {}
     uid_embeddings: dict[int, list[np.ndarray]] = {}
 
-    # Process frames one by one
-    for frame_idx, frame in enumerate(video):
+    frame_idx = 0
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
         run_detection = (frame_idx % DETECT_EVERY == 0)
-        detections = []
+        detections: list[Detection] = []
 
         # Run detector periodically
         if run_detection:
@@ -66,7 +90,7 @@ def process_video(
 
             boxes_orig, scores, _ = run_detector(detector, frame_pil)
 
-            crops = []
+            crops: list[Image.Image] = []
 
             # Create Norfair detections + crops
             for box, score in zip(boxes_orig, scores):
@@ -110,12 +134,11 @@ def process_video(
             ):
                 continue
 
-            emb = obj.last_detection.data["emb"]
+            emb  = obj.last_detection.data["emb"]
             crop = obj.last_detection.data["crop"]
 
             is_new_emb = not obj.last_detection.data.get(
-                "db_inserted",
-                False,
+                "db_inserted", False
             )
 
             # First time seeing this tracked object
@@ -125,21 +148,21 @@ def process_video(
 
                 # Create new identity if not found
                 if db_uid is None:
-                    db_uid = db.create_identity(emb, crop)
+                    db_uid   = db.create_identity(emb, crop)
                     db_label = None
                 else:
                     db.add_embedding(db_uid, emb, crop)
 
                 obj.db_uid = db_uid
-                obj.label = db_label or f"ID:{db_uid}"
+                obj.label  = db_label or f"ID:{db_uid}"
 
                 obj.last_detection.data["db_inserted"] = True
 
                 # Save metadata
                 if db_uid not in uid_info:
                     uid_info[db_uid] = {
-                        "label": db_label,
-                        "thumbnail": crop,
+                        "label":       db_label,
+                        "thumbnail":   crop,
                         "first_frame": frame_idx,
                     }
 
@@ -160,28 +183,30 @@ def process_video(
                 uid_embeddings[db_uid]
             )
 
-        # Draw tracked boxes on frame
-        draw_tracked_boxes(
-            frame,
-            tracked_objects,
-            draw_labels=True,
-        )
+        # Draw tracked boxes on frame (draw_box replaces deprecated draw_tracked_boxes)
+        for obj in tracked_objects:
+            draw_box(frame, obj, draw_labels=True)
 
         # Write processed frame
-        video.write(frame)
+        writer.write(frame)
 
         # Progress callback
-        if progress_callback and video.total_frames > 0:
+        if progress_callback and total_frames > 0:
             progress_callback(
-                frame_idx / video.total_frames,
-                f"Processing frame {frame_idx}/{video.total_frames}",
+                frame_idx / total_frames,
+                f"Processing frame {frame_idx}/{total_frames}",
             )
 
-    # Convert output video to H264
-    h264_path = video.output_path.replace(".mp4", "_h264.mp4")
+        frame_idx += 1
+
+    cap.release()
+    writer.release()
+
+    # ---------- Convert output video to H264 via ffmpeg ----------
+    h264_path = raw_output_path.replace(".mp4", "_h264.mp4")
 
     ret = os.system(
-        f'ffmpeg -y -i "{video.output_path}" '
+        f'ffmpeg -y -i "{raw_output_path}" '
         f'-i "{input_path}" '
         f'-map 0:v:0 -map 1:a:0? '
         f'-c:v libx264 -crf 23 -preset fast '
@@ -190,14 +215,12 @@ def process_video(
         f'"{h264_path}" -loglevel error'
     )
 
-    # Replace original output if conversion succeeded
+    # Replace raw output if conversion succeeded
     if ret == 0 and os.path.exists(h264_path):
-
-        os.remove(video.output_path)
+        os.remove(raw_output_path)
         final_path = h264_path
-
     else:
-        final_path = video.output_path
+        final_path = raw_output_path
 
     if progress_callback:
         progress_callback(1.0, "Done")
