@@ -9,11 +9,14 @@ from norfair import Detection, Tracker
 from database import PersonDatabase
 
 # Run detector every N frames
-DETECT_EVERY = 4
+DETECT_EVERY = 6
 
 # Norfair tracking settings
 NORFAIR_DIST_THR = 0.8
 HIT_COUNTER_MAX = 15
+
+# Re-ID Settings
+REID_SIMILARITY_THRESHOLD = 0.69  
 
 # ── Colour palette ────────────────────────────────────────────────────────────
 _PALETTE = [
@@ -179,14 +182,46 @@ def process_video(
                 # Existing tracked identity
                 else:
                     db_uid = obj.db_uid
-                    uid_embeddings[db_uid].append(emb)
 
                     if is_new_emb:
+                        # --- INTERCEPT ID SWITCH ---
+                        centroid = uid_info[db_uid].get("emb_centroid")
+                        if centroid is not None:
+                            # Because _mean_emb handles L2 normalization, dot product = cosine similarity
+                            similarity = float(np.dot(emb, centroid))
+                            
+                            if similarity < REID_SIMILARITY_THRESHOLD:
+                                # Semantic mismatch detected. Overwrite Norfair's assignment.
+                                db_uid, db_label, _ = db.search(emb)
+                                
+                                if db_uid is None:
+                                    db_uid = db.create_identity(emb, crop)
+                                    db_label = None
+                                else:
+                                    db.add_embedding(db_uid, emb, crop)
+                                
+                                # Correct the tracker's object metadata moving forward
+                                obj.db_uid = db_uid
+                                obj.label = db_label or f"ID:{db_uid}"
+                                
+                                # Setup dictionary space for the newly injected ID
+                                if db_uid not in uid_info:
+                                    uid_info[db_uid] = {
+                                        "label": db_label,
+                                        "thumbnail": crop,
+                                        "first_frame": frame_idx,
+                                    }
+
+                        # Commit the embedding to the corrected/confirmed ID
                         db.add_embedding(db_uid, emb, crop)
                         obj.last_detection.data["db_inserted"] = True
+                        
+                        # Only append to RAM when a *new* embedding is generated to save memory
+                        uid_embeddings.setdefault(db_uid, []).append(emb)
 
                 # Update centroid embedding for the character
-                uid_info[db_uid]["emb_centroid"] = _mean_emb(uid_embeddings[db_uid])
+                if db_uid in uid_embeddings and uid_embeddings[db_uid]:
+                    uid_info[db_uid]["emb_centroid"] = _mean_emb(uid_embeddings[db_uid])
 
             # -- Drawing Logic --
             pts = obj.estimate  # shape (2, 2): [[x1,y1],[x2,y2]]
