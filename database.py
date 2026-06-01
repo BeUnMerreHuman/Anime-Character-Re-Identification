@@ -7,12 +7,10 @@ import pandas as pd
 import pyarrow as pa
 from PIL import Image
 
-THRESHOLD_CONFIDENT  = 0.80   # ≥ this  → definite match
-THRESHOLD_UNCERTAIN  = 0.69   # ≥ this  → possible match (needs vote + count guard)
-MIN_EMBEDDINGS_UNCERTAIN = 5  # uid must have this many stored embeddings to be
-                               # trusted in the uncertain zone (0.69–0.80)
-TOP_K_VOTE           = 5      # how many neighbours to retrieve for voting
-
+THRESHOLD_CONFIDENT  = 0.80
+THRESHOLD_UNCERTAIN  = 0.69
+MIN_EMBEDDINGS_UNCERTAIN = 5
+TOP_K_VOTE           = 5
 
 def img_to_b64(img: Image.Image) -> str:
     buf = io.BytesIO()
@@ -58,54 +56,36 @@ class PersonDatabase:
         )
 
     def _embedding_count(self, uid: int, df: pd.DataFrame | None = None) -> int:
-        """Return the number of stored embedding rows for *uid*."""
         if self.table is None or self.table.count_rows() == 0:
             return 0
         if df is None:
             df = self.table.to_pandas()
         return int((df["id"] == uid).sum())
 
-
     def get_embedding_count(self, uid: int) -> int:
         return self._embedding_count(uid)
-
 
     def search(
         self,
         emb: np.ndarray,
+        exclude_uids: set[int] | list[int] | None = None,
     ) -> tuple[int | None, str | None, float | None]:
-        """Search for the closest identity.
-
-        Decision logic
-        ──────────────
-        similarity ≥ THRESHOLD_CONFIDENT (0.80)
-            → accept immediately (best neighbour wins)
-
-        THRESHOLD_UNCERTAIN (0.67) ≤ similarity < THRESHOLD_CONFIDENT
-            → uncertain zone:
-              1. retrieve TOP_K_VOTE neighbours
-              2. majority-vote on uid
-              3. only accept if winning uid has ≥ MIN_EMBEDDINGS_UNCERTAIN
-                 stored embeddings (avoids trusting a uid seen only once)
-
-        similarity < THRESHOLD_UNCERTAIN
-            → no match
-
-        Returns (uid, label, best_similarity).
-        uid / label are None when no match is accepted.
-        best_similarity is always the raw top-1 similarity (for display).
-        """
         if self.table is None or self.table.count_rows() == 0:
             return None, None, None
 
         k = max(TOP_K_VOTE, 1)
-        results = (
+        query = (
             self.table
             .search(np.array(emb, dtype=np.float32), vector_column_name="embedding")
             .metric("dot")
-            .limit(k)
-            .to_pandas()
         )
+
+        if exclude_uids:
+            exclude_str = ", ".join(map(str, exclude_uids))
+            if exclude_str:
+                query = query.where(f"id NOT IN ({exclude_str})")
+
+        results = query.limit(k).to_pandas()
 
         if results.empty:
             return None, None, None
@@ -114,27 +94,22 @@ class PersonDatabase:
         top1       = results.iloc[0]
         best_sim   = float(top1["similarity"])
 
-        # ── Confident zone ──────────────────────────────────────────────
         if best_sim >= THRESHOLD_CONFIDENT:
             return int(top1["id"]), top1["label"], best_sim
 
-        # ── Below uncertain zone ─────────────────────────────────────────
         if best_sim < THRESHOLD_UNCERTAIN:
             return None, None, best_sim
 
-        # ── Uncertain zone: top-k majority vote ──────────────────────────
         candidates = results[results["similarity"] >= THRESHOLD_UNCERTAIN]
 
         if candidates.empty:
             return None, None, best_sim
 
-        # Majority vote by uid
         vote_counts = candidates["id"].value_counts()
         winner_uid  = int(vote_counts.idxmax())
         winner_rows = candidates[candidates["id"] == winner_uid]
         winner_sim  = float(winner_rows["similarity"].max())
 
-        # Count guard: only trust if uid has enough stored embeddings
         emb_count = self._embedding_count(winner_uid)
         if emb_count < MIN_EMBEDDINGS_UNCERTAIN:
             return None, None, best_sim
@@ -142,11 +117,7 @@ class PersonDatabase:
         winner_label = winner_rows.iloc[0]["label"]
         return winner_uid, winner_label, winner_sim
 
-    def create_identity(
-        self,
-        emb: np.ndarray,
-        thumbnail: Image.Image,
-    ) -> int:
+    def create_identity(self, emb: np.ndarray, thumbnail: Image.Image) -> int:
         new_id  = self._next_id()
         emb_f32 = np.array(emb, dtype=np.float32)
         record  = {
@@ -163,12 +134,7 @@ class PersonDatabase:
 
         return new_id
 
-    def add_embedding(
-        self,
-        uid: int,
-        emb: np.ndarray,
-        thumbnail: Image.Image,
-    ) -> None:
+    def add_embedding(self, uid: int, emb: np.ndarray, thumbnail: Image.Image) -> None:
         if self.table is None:
             return
 
@@ -183,11 +149,7 @@ class PersonDatabase:
         }
         self.table.add([record])
 
-    def assign_label_and_merge(
-        self,
-        source_uid: int,
-        new_label: str,
-    ) -> None:
+    def assign_label_and_merge(self, source_uid: int, new_label: str) -> None:
         if self.table is None or not new_label.strip():
             return
 
