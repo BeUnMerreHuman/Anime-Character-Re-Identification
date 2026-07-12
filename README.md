@@ -79,7 +79,7 @@ uv sync
 The fine-tuned DEIMv2 model is hosted as a Notebook Output on Kaggle:
 
 ```bash
-kaggle kernels output muneeburrehman98/deimv2-finetune-anime -p DEIMv2 --force
+kaggle models instances versions download muneeburrehman98/deimv2-anime-character-detector/onnx/default/1
 
 ```
 
