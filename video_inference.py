@@ -76,7 +76,7 @@ def process_video(
         boxes_orig, scores, _ = run_detector(detector, frame_pil)
         
         if len(boxes_orig) > 0:
-            crops = [frame_pil.crop(map(float, box)) for box in boxes_orig]
+            crops = [frame_pil.crop(tuple(map(float, box))) for box in boxes_orig]
             
             # --- EMBEDDING ---
             embeddings = run_embedder_batch(embedder_processor, embedder_session, crops)
