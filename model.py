@@ -18,17 +18,31 @@ def resize_with_aspect_ratio(image, size, interpolation=Image.BILINEAR, fill_col
     
     return new_image, ratio, pad_w, pad_h
 
-def load_pipeline(detector_onnx="DEIMv2/best_stg2.onnx", embedder_onnx="DINOv3/dino_v3.onnx"):
+def load_pipeline(
+    detector_onnx="DEIMv2/best_stg2.onnx",
+    embedder_onnx="DINOv3/dino_v3.onnx"
+):
 
-    providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+    available_providers = ort.get_available_providers()
+
+    if "CUDAExecutionProvider" in available_providers:
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        print("Using GPU (CUDAExecutionProvider)")
+    else:
+        providers = ["CPUExecutionProvider"]
+        print("CUDA not available. Using CPU.")
+
     detector = ort.InferenceSession(detector_onnx, providers=providers)
     embedder_session = ort.InferenceSession(embedder_onnx, providers=providers)
-    
+
     embedder_processor = T.Compose([
         T.ToTensor(),
-        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        T.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        )
     ])
-    
+
     return detector, embedder_processor, embedder_session
 
 def run_detector(detector_session, original_image, size=640, thrh=0.4):

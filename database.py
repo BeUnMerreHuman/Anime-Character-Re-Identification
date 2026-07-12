@@ -55,6 +55,36 @@ class PersonDatabase:
             self.table_name, data=[record], schema=schema
         )
 
+    # --- New Methods for In-Memory Operations ---
+
+    def get_all_records(self) -> pd.DataFrame:
+        """Returns the entire database table as a Pandas DataFrame."""
+        if self.table is None or self.table.count_rows() == 0:
+            return pd.DataFrame()
+        return self.table.to_pandas()
+
+    def batch_add(self, records: list[dict]) -> None:
+        """Takes a list of raw records (with PIL images) and batch inserts them."""
+        if not records:
+            return
+
+        formatted_records = []
+        for r in records:
+            rec = r.copy()
+            if isinstance(rec["thumbnail"], Image.Image):
+                rec["thumbnail"] = img_to_b64(rec["thumbnail"])
+            formatted_records.append(rec)
+
+        if self.table is None:
+            dim = len(formatted_records[0]["embedding"])
+            self._create_table_with_record(formatted_records[0], dim)
+            if len(formatted_records) > 1:
+                self.table.add(formatted_records[1:])
+        else:
+            self.table.add(formatted_records)
+
+    # --- Retained Legacy Methods ---
+
     def _embedding_count(self, uid: int, df: pd.DataFrame | None = None) -> int:
         if self.table is None or self.table.count_rows() == 0:
             return 0
@@ -65,11 +95,7 @@ class PersonDatabase:
     def get_embedding_count(self, uid: int) -> int:
         return self._embedding_count(uid)
 
-    def search(
-        self,
-        emb: np.ndarray,
-        exclude_uids: set[int] | list[int] | None = None,
-    ) -> tuple[int | None, str | None, float | None]:
+    def search(self, emb: np.ndarray, exclude_uids: set[int] | list[int] | None = None) -> tuple[int | None, str | None, float | None]:
         if self.table is None or self.table.count_rows() == 0:
             return None, None, None
 
@@ -101,7 +127,6 @@ class PersonDatabase:
             return None, None, best_sim
 
         candidates = results[results["similarity"] >= THRESHOLD_UNCERTAIN]
-
         if candidates.empty:
             return None, None, best_sim
 
@@ -137,10 +162,8 @@ class PersonDatabase:
     def add_embedding(self, uid: int, emb: np.ndarray, thumbnail: Image.Image) -> None:
         if self.table is None:
             return
-
         rows  = self.table.search().where(f"id = {uid}").limit(1).to_pandas()
         label = rows.iloc[0]["label"] if not rows.empty else None
-
         record = {
             "id":        uid,
             "label":     label,
@@ -152,13 +175,9 @@ class PersonDatabase:
     def assign_label_and_merge(self, source_uid: int, new_label: str) -> None:
         if self.table is None or not new_label.strip():
             return
-
         label  = new_label.strip()
         df_all = self.table.to_pandas()
-
-        existing = df_all[
-            (df_all["label"] == label) & (df_all["id"] != source_uid)
-        ]
+        existing = df_all[(df_all["label"] == label) & (df_all["id"] != source_uid)]
 
         if not existing.empty:
             other_uid = int(existing.iloc[0]["id"])
@@ -183,7 +202,6 @@ class PersonDatabase:
     def get_ui_options(self) -> list[str]:
         if self.table is None or self.table.count_rows() == 0:
             return []
-
         df     = self.table.to_pandas()
         labels = df["label"].dropna().unique().tolist()
         return sorted(str(l) for l in labels if str(l).strip())
